@@ -49,5 +49,14 @@ with DAG(
         ),
         cwd="/opt/airflow",
     )
-
-    fetch_profile >> fetch_games >> transform_games
+    upload_games_to_s3 = BashOperator(
+        task_id="upload_games_to_s3",
+        bash_command=(
+            "python3 /opt/airflow/scripts/"
+            "upload_all_to_s3.py ajaza "
+            "--bucket "
+            "playerpulse-ali-jazz-raw-2026-218484443553-ca-central-1-an"
+        ),
+        cwd="/opt/airflow",
+    )
+    fetch_profile >> fetch_games >> transform_games >> upload_games_to_s3
