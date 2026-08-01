@@ -98,6 +98,10 @@ The dataset is deliberately small. The engineering architecture, automation, sec
 
 # Architecture
 
+For a deeper technical breakdown of the system design, component responsibilities, control flow, data flow, security model, loading strategy, and future-state architecture, see:
+
+**[Detailed Architecture Documentation](docs/architecture.md)**
+
 ```mermaid
 flowchart LR
 
