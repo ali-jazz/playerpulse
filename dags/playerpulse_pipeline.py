@@ -59,4 +59,22 @@ with DAG(
         ),
         cwd="/opt/airflow",
     )
-    fetch_profile >> fetch_games >> transform_games >> upload_games_to_s3
+    load_snowflake_raw = BashOperator(
+        task_id="load_snowflake_raw",
+        bash_command=(
+            "python3 /opt/airflow/scripts/"
+            "load_s3_to_snowflake.py"
+        ),
+        cwd="/opt/airflow",
+    )
+
+    dbt_build = BashOperator(
+        task_id="dbt_build",
+        bash_command=(
+            "dbt build "
+            "--project-dir /opt/airflow/dbt "
+            "--profiles-dir /opt/airflow/dbt"
+        ),
+        cwd="/opt/airflow",
+    )
+    fetch_profile >> fetch_games >> transform_games >> upload_games_to_s3 >> load_snowflake_raw >> dbt_build
