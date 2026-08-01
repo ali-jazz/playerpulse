@@ -1,0 +1,22 @@
+version: 2
+
+sources:
+  - name: raw
+    description: "Raw Chess.com data loaded from AWS S3 into Snowflake."
+    database: PLAYERPULSE
+    schema: RAW
+
+    tables:
+      - name: games
+        identifier: GAMES
+        description: "One row per Chess.com game with the original JSON payload."
+
+        columns:
+          - name: SOURCE_FILE
+            description: "S3 path of the monthly archive."
+
+          - name: LOADED_AT
+            description: "Timestamp when the archive was loaded into Snowflake."
+
+          - name: GAME_PAYLOAD
+            description: "Original semi-structured JSON for one game."

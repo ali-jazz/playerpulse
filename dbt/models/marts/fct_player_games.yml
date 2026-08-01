@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: fct_player_games
+    description: "One row per Chess.com game from the perspective of player ajaza."
+
+    columns:
+      - name: game_id
+        description: "Unique Chess.com game identifier."
+        data_tests:
+          - not_null
+          - unique
+
+      - name: player_username
+        description: "Player analyzed by the model."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["ajaza"]
+
+      - name: opponent_username
+        description: "Username of the opposing player."
+        data_tests:
+          - not_null
+
+      - name: player_color
+        description: "Color played by ajaza."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["white", "black"]
+
+      - name: game_outcome
+        description: "Result from the perspective of ajaza."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["win", "loss", "draw"]
+
+      - name: game_date
+        description: "Calendar date on which the game ended."
+        data_tests:
+          - not_null

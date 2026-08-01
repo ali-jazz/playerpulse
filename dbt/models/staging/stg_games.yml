@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: stg_games
+    description: "Clean, typed Chess.com game records prepared for analytics."
+
+    columns:
+      - name: game_id
+        description: "Unique Chess.com game identifier."
+        data_tests:
+          - not_null
+          - unique
+
+      - name: end_time_utc
+        description: "UTC timestamp when the game ended."
+        data_tests:
+          - not_null
+
+      - name: time_class
+        description: "Chess.com time category, such as rapid or blitz."
+        data_tests:
+          - not_null
+
+      - name: white_username
+        description: "Username of the player using the white pieces."
+        data_tests:
+          - not_null
+
+      - name: black_username
+        description: "Username of the player using the black pieces."
+        data_tests:
+          - not_null
+
+      - name: source_file
+        description: "S3 archive from which the game was loaded."
+        data_tests:
+          - not_null
