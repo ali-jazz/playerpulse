@@ -1308,7 +1308,9 @@ dbt Models
         ↓
 Automated Tests
         ↓
-CI/CD
+CI/CD (push-based — implemented)
+        ↓
+CI/CD (pull-request-based — target)
         ↓
 Dashboard / Analytics
 ```
@@ -1514,6 +1516,9 @@ Do not destroy the original representation too early.
 
 Use each tool for the problem it solves best.
 
+Applied to CI/CD itself in sections 49–50: test validation and deployment are
+separate workflows, not one.
+
 ## Make pipelines rerunnable
 
 Repeated execution should not silently corrupt data.
@@ -1566,6 +1571,8 @@ dbt MARTS
 dbt data quality tests
         ↓
 Analytics-ready data
+       ↓
+GitHub Actions validates and redeploys on every future change
 ```
 
 The most important architectural lesson from PlayerPulse is not any individual technology.
@@ -1584,3 +1591,92 @@ analytics
 ```
 
 and how those layers work together as one data platform.
+
+---
+
+# 49. CI/CD Architecture
+
+PlayerPulse runs two chained GitHub Actions workflows.
+
+```mermaid
+flowchart TD
+
+    PUSH[Push to main]
+    TESTWF[dbt-tests.yml]
+    TEST[job: test]
+    DBTTEST[dbt test]
+
+    DEPLOYWF[dbt-deploy.yml]
+    DEPLOY[job: deploy]
+    DBTBUILD[dbt build]
+
+    PUSH --> TESTWF
+    TESTWF --> TEST
+    TEST --> DBTTEST
+    DBTTEST -- success --> DEPLOYWF
+    DEPLOYWF --> DEPLOY
+    DEPLOY --> DBTBUILD
+```
+
+The two workflows communicate through `workflow_run`, not through `needs:`.
+
+`needs:` links jobs inside the same file. `workflow_run` links entire separate workflow files —
+one workflow triggers when another workflow finishes, and can inspect whether it succeeded before
+proceeding.
+
+Conceptually:
+
+```text
+needs:         same file, job-to-job
+workflow_run:  different files, workflow-to-workflow
+```
+
+## Why deploy checks conclusion, not just completion
+
+`dbt-deploy.yml` does not simply trigger when `dbt-tests.yml` finishes — it checks
+`github.event.workflow_run.conclusion == 'success'` before running anything. A completed workflow
+is not the same as a successful one. This mirrors the distinction already established between
+pipeline execution and data correctness.
+
+## Secrets in this context
+
+Both workflows independently read the same three GitHub repository secrets and independently
+generate their own `~/.dbt/profiles.yml`, scoped to the runner's lifetime. Neither workflow persists
+credentials, and neither reads the other's generated profile — each run starts from nothing and
+rebuilds what it needs.
+
+---
+
+# 50. Why Two Workflow Files Instead of One
+
+A single file with two jobs, connected by `needs: test`, would accomplish the same outcome with
+less configuration.
+
+This project uses two separate files instead, deliberately.
+
+## The trade-off
+
+```text
+One file, two jobs:
+  Simpler to read
+  Dependency is explicit and local
+  Test and deploy logic live in the same place
+
+Two files, workflow_run:
+  Test and deploy are independently modifiable
+  A change to deploy logic cannot accidentally affect test logic in the same diff
+  The dependency is less visible, harder to trace at a glance
+```
+
+## Why this project chose separation anyway
+
+This is the same principle from section 5 — *give each tool, or in this case each workflow, one
+responsibility — applied to CI/CD itself rather than to data infrastructure. `dbt-tests.yml` owns
+validation. `dbt-deploy.yml` owns deployment. Neither file needs to understand the other's internal
+steps, only whether the other succeeded.
+
+The cost is real: tracing *why* a deployment did not run requires checking a different file than
+the one that ran the tests. For a project this size, either approach is defensible — the choice
+here favors architectural clarity over configuration simplicity.
+
+---

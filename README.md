@@ -33,6 +33,7 @@ The project is intentionally built so that the architecture can be reused as a t
 - [Local Setup](#local-setup)
 - [Running the Pipeline](#running-the-pipeline)
 - [Verifying the Pipeline](#verifying-the-pipeline)
+- [CI/CD Pipeline](#cicd-pipeline)
 - [Using This Repository as a Template](#using-this-repository-as-a-template)
 - [Design Decisions](#design-decisions)
 - [Current Limitations](#current-limitations)
@@ -369,6 +370,11 @@ game_outcome IN ('win', 'loss', 'draw')
 
 ```text
 playerpulse/
+│
+├── .github/
+│   └── workflows/
+│       ├── dbt-tests.yml
+│       └── dbt-deploy.yml
 │
 ├── dags/
 │   ├── playerpulse_pipeline.py
@@ -1423,6 +1429,66 @@ FROM PLAYERPULSE.MARTS.FCT_PLAYER_GAMES;
 
 ---
 
+# CI/CD Pipeline
+
+PlayerPulse uses GitHub Actions to automatically validate and deploy dbt changes.
+
+---
+
+## Two separate workflows, chained
+
+```text
+Push to main
+     ↓
+dbt-tests.yml runs (job: test)
+     ↓
+dbt test against existing RAW data
+     ↓
+   Success?
+     ↓ yes
+dbt-deploy.yml triggers automatically (job: deploy)
+     ↓
+dbt build (rebuilds STAGING + MARTS, then tests them)
+```
+---
+
+## Why two files instead of one
+
+A single workflow file with two jobs (`test` and `deploy`, linked with `needs:`) would be simpler.
+This project deliberately uses two separate files instead, linked through `workflow_run`, to keep
+test validation and deployment as independently manageable units — the same separation-of-concerns
+principle applied elsewhere in this project (see Architectural Principles), now applied to the
+CI/CD layer itself.
+
+---
+
+## What each workflow does
+
+**`dbt-tests.yml`** — runs on every push to `main`. Installs dbt, builds a `profiles.yml` from
+GitHub Secrets, and runs `dbt test` against whatever already exists in Snowflake. This validates
+data quality without touching production models.
+
+**`dbt-deploy.yml`** — triggers only after `dbt-tests.yml` completes, and only proceeds if that
+run succeeded (`github.event.workflow_run.conclusion == 'success'`). Runs `dbt build`, which
+rebuilds the STAGING and MARTS models and re-tests them. A failing test run never triggers a
+deployment.
+
+---
+
+## Secrets
+
+Both workflows read `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, and `SNOWFLAKE_PASSWORD` from GitHub
+repository secrets — never committed, generated fresh into `~/.dbt/profiles.yml` on each run.
+
+---
+
+## Current scope
+
+This validates and deploys dbt model changes. It does not yet run Python unit tests, SQL linting,
+or trigger on pull requests — see Production Improvements.
+
+---
+
 # Using This Repository as a Template
 
 The architecture is deliberately reusable.
@@ -1690,9 +1756,11 @@ using least-privilege access.
 
 ---
 
-## No CI/CD yet
+## CI/CD covers dbt only
 
-GitHub currently stores the project, but automated pull-request validation has not yet been implemented.
+GitHub Actions now validates and deploys dbt model changes automatically on push to `main`.
+It does not yet cover Python script testing, SQL linting, or pull-request-triggered validation —
+only push-to-main is covered right now.
 
 ---
 
@@ -1728,14 +1796,13 @@ Use deterministic `MERGE` or incremental dbt models.
 
 ### CI/CD
 
-Automatically run:
+dbt validation and deployment are automated. Still missing:
 
 ```text
-Python tests
+Python unit tests
 SQL linting
-dbt parse
-dbt tests
-Docker validation
+pull-request triggers (currently push-to-main only)
+Docker image validation
 ```
 
 on pull requests.
@@ -1859,9 +1926,10 @@ Python indentation mistakes will appear here.
 - [x] dbt mart model
 - [x] dbt tests
 - [x] Full Airflow pipeline
+- [x] GitHub Actions CI
+- [x] Automated dbt deploy on successful tests
 - [ ] Incremental Snowflake loading
 - [ ] Dedicated Snowflake roles
-- [ ] GitHub Actions CI
 - [ ] Pipeline monitoring
 - [ ] Automated documentation
 
