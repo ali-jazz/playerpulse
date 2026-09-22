@@ -1,6 +1,6 @@
 # PlayerPulse Architecture
 
-## 1. Purpose
+# 1. Purpose
 
 This document describes the technical architecture of PlayerPulse.
 
