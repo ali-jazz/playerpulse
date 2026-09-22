@@ -176,6 +176,7 @@ The Airflow DAG explains **the actual execution order**.
 | dbt Core | SQL transformation framework |
 | dbt-snowflake | Snowflake adapter for dbt |
 | Git | Version control |
+| GitHub Actions | Automatically validates and deploys dbt changes on push |
 | GitHub | Source repository and portfolio |
 | JSON | Raw API format |
 | JSONL | Local flattened intermediate format |
@@ -206,6 +207,8 @@ Airflow does **not** replace Python.
 Snowflake does **not** replace S3.
 
 dbt does **not** replace Airflow.
+
+GitHub Actions does **not** replace dbt.
 
 Each tool solves a different problem.
 
