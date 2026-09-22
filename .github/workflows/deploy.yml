@@ -1,4 +1,3 @@
-# .github/workflows/dbt-deploy.yml — fichier séparé, comme tu le voulais
 name: dbt deploy
 
 on:
