@@ -377,7 +377,7 @@ playerpulse/
 ├── .github/
 │   └── workflows/
 │       ├── dbt-tests.yml
-│       └── dbt-deploy.yml
+│       └── deploy.yml
 │
 ├── dags/
 │   ├── playerpulse_pipeline.py
