@@ -1543,6 +1543,12 @@ Do not introduce distributed-system complexity before the scale requires it.
 
 A portfolio project is more credible when its limitations are explicit.
 
+## Databricks pipeline
+
+The same separation-of-responsibilities principle extends to the Databricks pipeline (sections
+51-60): Bronze/Silver/Gold hold the same roles as RAW/STAGING/MARTS, proving the principle is
+architectural, not tool-specific.
+
 ---
 
 # 48. Architecture Summary
@@ -1591,6 +1597,9 @@ analytics
 ```
 
 and how those layers work together as one data platform.
+
+A parallel Databricks/Delta Lake pipeline (sections 51-60) reimplements the same layering on a
+second engine, demonstrating that the pattern — not any single vendor — is the actual architecture.
 
 ---
 
@@ -1681,10 +1690,13 @@ here favors architectural clarity over configuration simplicity.
 
 ---
 
-# 51. Databricks Delta Lake Extension
+# 51. Databricks Delta Lake Extension — Overview
 
-PlayerPulse also runs a second, parallel ingestion path on Databricks, using Delta Lake and
-Unity Catalog, applied to the same raw S3 data the Snowflake pipeline consumes.
+PlayerPulse runs a second, parallel ingestion path on Databricks, using Delta Lake and Unity
+Catalog against the same raw S3 data the Snowflake pipeline consumes. It is not a replacement.
+It is proof that the RAW → STAGING → MARTS layering is an architectural pattern, not something
+tied to Snowflake's syntax — the same thinking, renamed Bronze/Silver/Gold as is conventional on
+Databricks, running on a completely different engine.
 
 ```mermaid
 flowchart TD
@@ -1700,71 +1712,251 @@ flowchart TD
     SILVER -->|player perspective| GOLD
 ```
 
-This is not a replacement for the Snowflake/dbt pipeline. It is the same RAW → STAGING → MARTS
-thinking, renamed Bronze/Silver/Gold as is conventional on Databricks, and implemented on a
-different engine — proof that the layering pattern itself, not any single vendor's syntax, is
-the actual architecture.
+Both pipelines read the exact same S3 source. Neither writes back to it. They are two independent
+consumers of one raw data lake, which is itself a real-world pattern — one team's warehouse and
+another team's lakehouse can both sit downstream of the same object storage without conflict.
 
-## External vs. managed storage
+---
 
-Unity Catalog draws the same line Snowflake does between externally-owned and platform-owned
-storage, and this project hit that boundary directly while building it: creating a schema with
-its storage location pointed at the read-only External Location failed outright, because a
-managed table needs to write its own data files, which a read-only credential cannot do.
+# 52. Unity Catalog Namespace and Access Model
 
-Bronze, Silver, and Gold are therefore managed tables with no custom storage location — Databricks
-owns their files in the metastore root, exactly as Snowflake owns STAGING and MARTS. The
-External Location (`playerpulse_s3_raw`) is used for exactly one thing: granting read access to
-the raw S3 path at query time. It was never meant to back a schema's storage.
+Unity Catalog organizes data in three levels: `catalog.schema.table`. `workspace` is the catalog,
+`bronze`/`silver`/`gold` are schemas, and `games_raw`/`games`/`fct_player_games` are the tables.
+This is the same three-level idea as Snowflake's `database.schema.table` — a different vendor's
+name for an identical structure.
 
-## Why the IAM role is read-only, and what that costs
+## Storage Credential and External Location
 
-`PlayerPulseDatabricksS3Read` grants only `GetObject`, `ListBucket`, and `GetBucketLocation` —
-no write permissions. Testing the External Location surfaces this directly: Databricks reports
-`Read`, `List`, `Path Exists`, `Assume Role`, `Self Assume Role`, and `External ID Condition` as
-successful, but `File Events Resource Provision` and `File Events Resource Teardown` fail, with
-Databricks stating the credential cannot perform the write operations those require.
+Two separate objects grant Databricks access to S3, mirroring Snowflake's Storage Integration:
 
-File events back Auto Loader's incremental file-notification mode (S3 event notifications through
-SNS/SQS), which needs write access to provision that infrastructure. This project uses plain batch
-reads (`spark.read`) on a small, infrequently-updated dataset, so file notifications add no value
-here — the two failed checks are the correct, expected result of a deliberate least-privilege
-choice, not a misconfiguration.
+```text
+Storage Credential   → the AWS IAM role Databricks assumes (playerpulse-databricks-s3-cred)
+External Location    → the specific S3 path that credential is allowed to touch
+                        (playerpulse_s3_raw)
+```
 
-## Bronze
+A Storage Credential alone grants nothing — it is a set of AWS-side permissions with no path
+attached. An External Location is what actually authorizes reading a specific S3 location, using
+that credential.
 
-Reads the raw JSON archives from the External Location with Spark's JSON reader
-(`multiLine`, since each file is one pretty-printed object, not newline-delimited JSON).
-Partition discovery on the `username=/year=/month=` folder layout adds those as columns. An
-`ingested_at` timestamp is added, and the result is written as-is — one row per source file,
-nested `games` array untouched — mirroring RAW's role of holding ingested data unmodified.
+## The AWS trust chain
 
-## Silver
+`PlayerPulseDatabricksS3Read`'s trust policy has two required principals, not one:
 
-`LATERAL VIEW EXPLODE` is Spark SQL's equivalent of Snowflake's `LATERAL FLATTEN`: it turns the
-one-row-per-file, array-valued Bronze table into one row per game. The nested `white`, `black`,
-and `accuracies` structs are flattened into typed columns through the same field mapping as the
-dbt `stg_games` model, translated from Snowflake's `:`-path/cast syntax to Spark's dot notation.
+```text
+1. Unity Catalog's own static AWS principal
+   arn:aws:iam::414351767826:role/unity-catalog-prod-UCMasterRole-14S5ZJVKOTYTL
+2. The role itself (a self-assuming role)
+```
 
-## Gold
+Databricks assumes the role through its own central account first, then that assumed identity has
+to assume the same role again on behalf of the workspace — hence the role must trust itself. Both
+assumptions are further gated by an External ID condition, the same confused-deputy protection
+already used for the Snowflake integration: without the correct External ID, even the right
+principal cannot assume the role.
 
-A direct Spark SQL port of the dbt `fct_player_games` mart: the same `CASE WHEN` logic reframes
-white/black into player/opponent from Ali's perspective, and derives `game_outcome` and
-`rating_difference` in a second pass, since both depend on columns the first pass computes.
+## Why the External Location is scoped to the whole bucket, not to `chesscom/`
 
-## Quality checks
+The Snowflake Storage Integration is scoped tightly to `s3://.../chesscom/` — nothing outside that
+prefix is reachable. The Databricks equivalent could not be scoped the same way: Databricks'
+"Create external location" quickstart form validates its input as a bare bucket name and rejects
+any trailing path, so `s3://bucket/chesscom/` fails validation outright.
 
-Six checks, run as direct SQL assertions rather than through a testing framework: `not_null` and
-`unique` on `game_id`, `not_null` on `player_username`/`opponent_username`, `accepted_values` on
-`game_outcome` and `player_color`, and one custom check comparing the filtered Silver row count
-against the Gold row count — confirming the player-perspective transformation neither dropped nor
-duplicated rows. Each generic dbt test is, underneath, exactly this: a query that must return zero
-rows to pass.
+The External Location is therefore created at the bucket root. This does not widen access in
+practice — the IAM role's own inline policy already grants `GetObject`/`ListBucket` on the whole
+bucket, not just the `chesscom/` prefix, so the External Location's scope matches what the IAM
+role already allowed. The prefix filtering that Snowflake enforces at the integration level happens
+here at the query level instead — the notebook only ever reads `chesscom/games/...` paths, even
+though Unity Catalog would technically permit reading elsewhere in the bucket.
 
-## Current limitations
+---
 
-This pipeline runs manually, cell by cell, inside a notebook. It is not scheduled, not orchestrated
-by Airflow, and not covered by the GitHub Actions CI/CD pipeline. Extending it with orchestration
-and CI coverage is future work, not yet done.
+# 53. Managed vs. External Tables
 
+Unity Catalog draws a line between tables it owns and tables it does not, and this project hit
+that line directly while building it.
+
+Creating a schema with its storage location pointed at the read-only `playerpulse_s3_raw` External
+Location failed immediately: *"Creating a schema with a read-only storage location is not
+supported."* A managed table needs to write its own Parquet/Delta files somewhere. A read-only
+credential cannot satisfy that, by definition.
+
+```text
+Managed table    → Databricks owns the storage, in the metastore root
+                    (no custom storage location set on the schema)
+External table   → storage lives somewhere the user owns (here, S3),
+                    accessed only through a Storage Credential
+```
+
+Bronze, Silver, and Gold are all managed tables with no custom schema storage location — Databricks
+owns their files, exactly as Snowflake owns STAGING and MARTS. `playerpulse_s3_raw` is used for
+exactly one purpose: granting read access to the raw S3 path inside the notebook code
+(`spark.read...`). It was never meant to back a schema's storage, and Unity Catalog's refusal to
+let it do so is correct, not a bug.
+
+---
+
+# 54. Bronze Layer
+
+```python
+raw_path = "s3://playerpulse-ali-jazz-raw-2026-218484443553-ca-central-1-an/chesscom/games/"
+df_bronze = spark.read.option("multiLine", "true").format("json").load(raw_path)
+```
+
+Each raw file was written by `fetch_player_games.py` with `json.dumps(data, indent=2, ...)` — one
+pretty-printed, multi-line JSON object per file, not one-record-per-line (NDJSON), which is Spark's
+default assumption for JSON. `multiLine` tells Spark to parse each file as a single JSON document
+instead of expecting a record boundary at every newline.
+
+The S3 keys are partitioned as `chesscom/games/username=.../year=.../month=.../games.json`.
+Pointing the reader at the parent folder rather than a specific file triggers Spark's partition
+discovery: `username`, `year`, and `month` are inferred directly from the folder names and added
+as columns, with no explicit schema needed.
+
+The result is one row per source file, each holding a `games` array with every game from that
+player/month untouched — the same role RAW plays in the Snowflake pipeline: preserve what was
+ingested, exactly as it arrived, before any interpretation happens. An `ingested_at` timestamp
+(`current_timestamp()`) is added before writing to `bronze.games_raw`, giving Bronze slightly finer
+lineage than Snowflake RAW's single `loaded_at` per batch.
+
+---
+
+# 55. Silver Layer
+
+## LATERAL VIEW EXPLODE
+
+Bronze holds one row per file, with a `games` column that is an array. Silver needs one row per
+game. `LATERAL VIEW EXPLODE` is Spark SQL's mechanism for exactly this: it takes an array-valued
+column and produces one output row per array element, repeating every other column across each new
+row. This is the same operation Snowflake's `LATERAL FLATTEN` performs on a VARIANT array — same
+concept, different SQL dialect:
+
+```sql
+-- Snowflake
+select ... from raw_table, lateral flatten(input => games_column)
+
+-- Spark SQL
+select ... from bronze_games
+lateral view explode(games) exploded_table as game
+```
+
+## Flattening the nested structs
+
+Once exploded, each row's `game` value is a struct with nested sub-structs (`white`, `black`,
+`accuracies`). Spark's dot notation (`game.white.username`) reaches into them directly, the same
+way Snowflake's `:` path syntax (`game_payload:"white":"username"`) reaches into a VARIANT — the
+field mapping is a line-by-line port of the dbt `stg_games` model. `end_time`, a Unix epoch integer,
+is converted with `timestamp_seconds()`, Spark's equivalent of Snowflake's `to_timestamp_ntz`.
+
+`silver.games` keeps `source_username`, `source_year`, `source_month`, and `ingested_at` from
+Bronze — carrying forward structured lineage columns instead of a single flat `source_file` string,
+which is a small improvement over the Snowflake staging model, made possible only because Bronze's
+partition discovery already produced structured columns instead of a filename to parse.
+
+---
+
+# 56. Gold Layer
+
+Gold's job is reframing, not just cleaning. Every Silver row is symmetric — it has a `white_*` side
+and a `black_*` side, and nothing in the row says which one is "Ali." Gold answers that question
+with a `CASE WHEN lower(white_username) = 'ajaza'` check, repeated once per pair of columns
+(username, rating, result, accuracy), to derive `player_*`/`opponent_*` columns instead — a direct
+port of the dbt `fct_player_games` mart, same logic, same output shape.
+
+## Why this needs two passes
+
+`game_outcome` and `rating_difference` both depend on columns the reframing step just created
+(`player_result`, `opponent_result`, `player_rating`, `opponent_rating`). SQL evaluates all
+expressions in a single `SELECT` against the *input* row, so a column defined earlier in that same
+`SELECT` cannot be referenced by another expression in it. A second pass — here, a second CTE reading
+from the first — is required once a computed value needs to feed a further computation.
+
+`game_outcome`'s fallback logic is deliberate, not an oversight: chess.com's `result` field is never
+literally `'draw'` — a draw shows as `'agreed'`, `'repetition'`, `'stalemate'`, `'insufficient'`, or
+similar on both sides. Checking only for `player_result = 'win'` and `opponent_result = 'win'`, and
+falling through to `'draw'` when neither is true, correctly classifies every draw variant without
+needing to enumerate them.
+
+---
+
+# 57. What Delta Lake Actually Is
+
+Delta Lake is not a database and not a warehouse. It is a storage **format** — Parquet files plus a
+transaction log — that adds guarantees plain Parquet does not have on its own:
+
+```text
+ACID transactions   → a write either fully succeeds or fully fails, never half-applied
+Schema enforcement  → a write with the wrong schema is rejected, not silently accepted
+Time travel         → older versions of a table can be queried or restored
+Unified batch/stream → the same table can be read as a static snapshot or a stream
+```
+
+Every `CREATE TABLE`/`CREATE OR REPLACE TABLE` in this project's Bronze/Silver/Gold layers is,
+underneath, writing Parquet files plus a Delta transaction log — the `format("delta")` on Bronze's
+write call is what requests that log. Databricks itself is a compute and governance platform (the
+notebooks, Unity Catalog, cluster/serverless compute); Delta Lake is what turns the S3/metastore
+storage those tables sit on into something with warehouse-like guarantees. The combination —
+cheap object storage plus a transactional layer on top — is what "lakehouse" refers to. Snowflake
+reaches similar guarantees differently: storage and the transactional guarantees are bundled
+together as one proprietary system, not a separate open format over generic object storage.
+
+---
+
+# 58. Data Quality Checks on Databricks
+
+Six checks, written as direct SQL assertions rather than through a testing framework:
+
+```text
+not_null        → game_id, player_username, opponent_username
+unique          → game_id
+accepted_values → game_outcome IN ('win','loss','draw')
+                   player_color IN ('white','black')
+custom          → Silver ajaza-filtered row count == Gold row count
+```
+
+Every dbt generic test compiles down to exactly this shape: a SQL query that must return zero rows
+to pass. Writing them by hand here makes that mechanism visible instead of hidden behind dbt's
+macros. The custom check is the only one with no dbt equivalent among the four generic tests — it
+exists specifically to catch a reframing bug (Gold's `WHERE` clause silently dropping or duplicating
+rows), the same category of risk the project's weekly self-study plan calls out as worth a
+hand-written test rather than a boilerplate one.
+
+---
+
+# 59. Comparison — Snowflake/dbt vs. Databricks/Delta Lake
+
+| Concept | Snowflake / dbt | Databricks / Delta Lake |
+|---|---|---|
+| Raw layer | RAW (VARIANT column) | Bronze (managed Delta table) |
+| Cleaned layer | STAGING | Silver |
+| Business layer | MARTS | Gold |
+| Array/nested expansion | `LATERAL FLATTEN` | `LATERAL VIEW EXPLODE` |
+| Nested field access | `payload:"field"` | `struct.field` |
+| Cloud storage grant | Storage Integration + External Stage | Storage Credential + External Location |
+| Trust mechanism | AssumeRole + External ID | Self-assuming role + Unity Catalog principal + External ID |
+| Full-refresh write | `dbt build` (table materialization) | `CREATE OR REPLACE TABLE ... AS` |
+| Row-level test | dbt generic test (`not_null`, `unique`, ...) | Hand-written SQL assertion |
+| Elevated dev role | `ACCOUNTADMIN` | N/A — role was read-only from the start |
+
+The point of this table is not that one platform is better. It is that the same five ideas —
+preserve raw data, separate cleaning from business logic, expand nested data explicitly, grant
+narrow scoped access, test with queries that must return nothing — show up under different names
+on both platforms. Learning the pattern transfers; memorizing one vendor's syntax does not.
+
+---
+
+# 60. Current Limitations of the Databricks Extension
+
+```text
+Manual execution      → runs cell by cell in a notebook, no scheduler
+No orchestration      → not triggered by Airflow or Databricks Jobs
+No CI coverage        → GitHub Actions validates the dbt pipeline only, not this notebook
+Bucket-root scope     → External Location covers the whole bucket, not just chesscom/
+                         (see section 52 for why, and why it does not widen real access)
+Free Edition          → serverless-only compute, single workspace, no cluster-level tuning
+Small dataset         → same 10-game dataset as the rest of the project; no volume/performance
+                         testing has been done on this path
+```
+
+---
 ---
