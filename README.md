@@ -410,6 +410,9 @@ playerpulse/
 │       └── marts/
 │           ├── fct_player_games.sql
 │           └── fct_player_games.yml
+│ 
+│├── notebooks/
+│   └── playerpulse_delta_lake_pipeline.ipynb
 │
 ├── data/
 │   ├── raw/
