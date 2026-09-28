@@ -1680,3 +1680,91 @@ the one that ran the tests. For a project this size, either approach is defensib
 here favors architectural clarity over configuration simplicity.
 
 ---
+
+# 51. Databricks Delta Lake Extension
+
+PlayerPulse also runs a second, parallel ingestion path on Databricks, using Delta Lake and
+Unity Catalog, applied to the same raw S3 data the Snowflake pipeline consumes.
+
+```mermaid
+flowchart TD
+    S3[S3: chesscom/games/ raw JSON]
+    EL["Unity Catalog External Location<br/>playerpulse_s3_raw (read-only)"]
+    BRONZE["Bronze: bronze.games_raw<br/>managed Delta table"]
+    SILVER["Silver: silver.games<br/>managed Delta table"]
+    GOLD["Gold: gold.fct_player_games<br/>managed Delta table"]
+
+    S3 --> EL
+    EL --> BRONZE
+    BRONZE -->|LATERAL VIEW EXPLODE| SILVER
+    SILVER -->|player perspective| GOLD
+```
+
+This is not a replacement for the Snowflake/dbt pipeline. It is the same RAW → STAGING → MARTS
+thinking, renamed Bronze/Silver/Gold as is conventional on Databricks, and implemented on a
+different engine — proof that the layering pattern itself, not any single vendor's syntax, is
+the actual architecture.
+
+## External vs. managed storage
+
+Unity Catalog draws the same line Snowflake does between externally-owned and platform-owned
+storage, and this project hit that boundary directly while building it: creating a schema with
+its storage location pointed at the read-only External Location failed outright, because a
+managed table needs to write its own data files, which a read-only credential cannot do.
+
+Bronze, Silver, and Gold are therefore managed tables with no custom storage location — Databricks
+owns their files in the metastore root, exactly as Snowflake owns STAGING and MARTS. The
+External Location (`playerpulse_s3_raw`) is used for exactly one thing: granting read access to
+the raw S3 path at query time. It was never meant to back a schema's storage.
+
+## Why the IAM role is read-only, and what that costs
+
+`PlayerPulseDatabricksS3Read` grants only `GetObject`, `ListBucket`, and `GetBucketLocation` —
+no write permissions. Testing the External Location surfaces this directly: Databricks reports
+`Read`, `List`, `Path Exists`, `Assume Role`, `Self Assume Role`, and `External ID Condition` as
+successful, but `File Events Resource Provision` and `File Events Resource Teardown` fail, with
+Databricks stating the credential cannot perform the write operations those require.
+
+File events back Auto Loader's incremental file-notification mode (S3 event notifications through
+SNS/SQS), which needs write access to provision that infrastructure. This project uses plain batch
+reads (`spark.read`) on a small, infrequently-updated dataset, so file notifications add no value
+here — the two failed checks are the correct, expected result of a deliberate least-privilege
+choice, not a misconfiguration.
+
+## Bronze
+
+Reads the raw JSON archives from the External Location with Spark's JSON reader
+(`multiLine`, since each file is one pretty-printed object, not newline-delimited JSON).
+Partition discovery on the `username=/year=/month=` folder layout adds those as columns. An
+`ingested_at` timestamp is added, and the result is written as-is — one row per source file,
+nested `games` array untouched — mirroring RAW's role of holding ingested data unmodified.
+
+## Silver
+
+`LATERAL VIEW EXPLODE` is Spark SQL's equivalent of Snowflake's `LATERAL FLATTEN`: it turns the
+one-row-per-file, array-valued Bronze table into one row per game. The nested `white`, `black`,
+and `accuracies` structs are flattened into typed columns through the same field mapping as the
+dbt `stg_games` model, translated from Snowflake's `:`-path/cast syntax to Spark's dot notation.
+
+## Gold
+
+A direct Spark SQL port of the dbt `fct_player_games` mart: the same `CASE WHEN` logic reframes
+white/black into player/opponent from Ali's perspective, and derives `game_outcome` and
+`rating_difference` in a second pass, since both depend on columns the first pass computes.
+
+## Quality checks
+
+Six checks, run as direct SQL assertions rather than through a testing framework: `not_null` and
+`unique` on `game_id`, `not_null` on `player_username`/`opponent_username`, `accepted_values` on
+`game_outcome` and `player_color`, and one custom check comparing the filtered Silver row count
+against the Gold row count — confirming the player-perspective transformation neither dropped nor
+duplicated rows. Each generic dbt test is, underneath, exactly this: a query that must return zero
+rows to pass.
+
+## Current limitations
+
+This pipeline runs manually, cell by cell, inside a notebook. It is not scheduled, not orchestrated
+by Airflow, and not covered by the GitHub Actions CI/CD pipeline. Extending it with orchestration
+and CI coverage is future work, not yet done.
+
+---
