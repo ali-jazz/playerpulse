@@ -200,6 +200,8 @@ One of the main goals of PlayerPulse is understanding where the responsibility o
 | dbt | Builds tested SQL transformation models |
 | Git | Tracks source-code history |
 | GitHub | Publishes and documents the project |
+| Databricks / Unity Catalog | Runs a parallel Bronze/Silver/Gold pipeline, governs managed and external table access |
+| Delta Lake | Provides ACID, versioned storage for the managed Bronze/Silver/Gold tables |
 
 For example:
 
@@ -1823,6 +1825,13 @@ Airflow logs and task states exist, but metrics, alerting, and external monitori
 
 ---
 
+## Databricks pipeline is manual
+
+The Bronze/Silver/Gold notebook runs cell by cell. It is not scheduled, not orchestrated by
+Airflow, and not covered by CI/CD.
+
+---
+
 # Production Improvements
 
 A more production-oriented version would introduce:
@@ -1981,6 +1990,10 @@ Python indentation mistakes will appear here.
 - [x] Full Airflow pipeline
 - [x] GitHub Actions CI
 - [x] Automated dbt deploy on successful tests
+- [x] Databricks Bronze/Silver/Gold pipeline
+- [x] Unity Catalog External Location
+- [ ] Orchestrate Databricks notebook (Airflow or Databricks Jobs)
+- [ ] CI coverage for the Databricks pipeline
 - [ ] Incremental Snowflake loading
 - [ ] Dedicated Snowflake roles
 - [ ] Pipeline monitoring
