@@ -2,7 +2,7 @@
 
 > End-to-end cloud data engineering and analytics pipeline using Python, Apache Airflow, AWS S3, Snowflake, dbt, Docker, and the Chess.com Public API.
 
-PlayerPulse is a portfolio data engineering project designed to demonstrate how data moves through a modern analytics stack — from an external API to raw cloud storage, into a data warehouse, through tested transformation layers, and eventually into analytics-ready models.
+PlayerPulse is a portfolio data engineering project designed to demonstrate how data moves through a modern analytics stack, from an external API to raw cloud storage, into a data warehouse, through tested transformation layers, and eventually into analytics-ready models.
 
 The project is intentionally built so that the architecture can be reused as a template for other API-based data pipelines.
 
@@ -63,6 +63,9 @@ The pipeline currently:
 10. builds analytics-ready MART models;
 11. runs automated data quality tests.
 
+A second, parallel pipeline extends the same raw data into Databricks, using Delta Lake and Unity
+Catalog — see [Databricks Delta Lake Extension](#databricks-delta-lake-extension).
+
 The goal is not simply to create a chess dashboard.
 
 The primary objective is to understand and demonstrate the responsibilities and interactions of the major components in a modern cloud data platform.
@@ -93,6 +96,16 @@ Current archive distribution:
 | 2018-11 | 4 |
 | 2026-01 | 1 |
 | 2026-03 | 5 |
+
+Databricks pipeline (same source data, separate engine):
+
+| Metric | Value |
+|---|---:|
+| Bronze rows (files ingested) | 3 |
+| Silver rows (games exploded) | 10 |
+| Gold rows (player-perspective games) | 10 |
+| Quality checks | 6 |
+| Quality check failures | 0 |
 
 The dataset is deliberately small. The engineering architecture, automation, security decisions, reproducibility, and data modeling are the main focus of the project.
 
@@ -137,6 +150,21 @@ flowchart LR
     DBTMART --> TESTS
     DBTMART --> BI
 ```
+A second pipeline reads the same S3 data into Databricks:
+
+```mermaid
+flowchart LR
+    S3B[AWS S3 Raw Data Lake]
+    BRONZE[Databricks Bronze]
+    SILVER[Databricks Silver]
+    GOLD[Databricks Gold]
+
+    S3B --> BRONZE
+    BRONZE --> SILVER
+    SILVER --> GOLD
+```
+
+Full detail in [Databricks Delta Lake Extension](#databricks-delta-lake-extension).
 
 The actual Airflow DAG currently executes:
 
@@ -181,6 +209,9 @@ The Airflow DAG explains **the actual execution order**.
 | GitHub | Source repository and portfolio |
 | JSON | Raw API format |
 | JSONL | Local flattened intermediate format |
+| Databricks | Runs a parallel Bronze/Silver/Gold pipeline on the same raw S3 data |
+| Delta Lake | ACID, versioned storage format for the managed Bronze/Silver/Gold tables |
+| Unity Catalog | Governs managed and external table access on Databricks |
 
 ---
 
@@ -212,6 +243,8 @@ Snowflake does **not** replace S3.
 dbt does **not** replace Airflow.
 
 GitHub Actions does **not** replace dbt.
+
+Databricks does **not** replace Snowflake.
 
 Each tool solves a different problem.
 
@@ -1825,10 +1858,15 @@ Airflow logs and task states exist, but metrics, alerting, and external monitori
 
 ---
 
-## Databricks pipeline is manual
+## Databricks pipeline is manual and unscoped to a prefix
 
-The Bronze/Silver/Gold notebook runs cell by cell. It is not scheduled, not orchestrated by
-Airflow, and not covered by CI/CD.
+The Bronze/Silver/Gold notebook runs cell by cell, not scheduled, not orchestrated by Airflow,
+not covered by CI/CD. Its External Location also grants access to the whole S3 bucket rather than
+just the `chesscom/` prefix Snowflake is scoped to, because Databricks' external-location creation
+form does not accept a sub-path. The IAM role's own policy already matched that broader scope, so
+this does not widen actual access, see architecture.md section 52.
+
+---
 
 ---
 
@@ -1884,6 +1922,15 @@ unexpected row counts
 ### Data contracts
 
 Validate expected source structure before processing.
+
+### Databricks
+
+```text
+Orchestrate the notebook (Airflow task or Databricks Jobs) instead of running it manually
+Scope the External Location to chesscom/ once a path-capable creation method is used
+Add CI coverage for the notebook
+Add a write-capable role if Auto Loader / file-notification ingestion is ever needed
+```
 
 ### Scalability
 
@@ -2179,6 +2226,24 @@ tests
 task orchestration
 ```
 
+## Databricks, Delta Lake, and Unity Catalog
+
+Delta Lake is a storage format, not a warehouse — ACID transactions and versioning layered on top
+of Parquet. Databricks is the compute and governance platform around it.
+
+```text
+Managed table   → the platform owns the storage
+External table  → the user owns the storage, access is granted explicitly
+```
+
+A read-only credential cannot back a managed table's storage — Unity Catalog refuses that
+combination outright, which is what first made the managed/external distinction concrete rather
+than theoretical.
+
+`LATERAL VIEW EXPLODE` and `LATERAL FLATTEN` are the same operation under different names. Porting
+the dbt staging and mart logic to Spark SQL was mostly a translation exercise once that was clear —
+proof that the RAW/STAGING/MARTS pattern is not specific to Snowflake.
+
 ---
 
 # Portfolio Goal
@@ -2189,6 +2254,10 @@ The repository serves two purposes:
 
 1. demonstrate practical experience with a modern data stack;
 2. act as a reusable reference architecture for future data engineering projects.
+
+A second implementation of the same RAW/STAGING/MARTS pattern, on Databricks with Delta Lake and
+Unity Catalog instead of Snowflake, is included specifically to demonstrate that the architecture
+is portable, not memorized syntax for one vendor.
 
 A future project should be able to reuse the same pattern:
 
