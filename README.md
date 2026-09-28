@@ -34,6 +34,7 @@ The project is intentionally built so that the architecture can be reused as a t
 - [Running the Pipeline](#running-the-pipeline)
 - [Verifying the Pipeline](#verifying-the-pipeline)
 - [CI/CD Pipeline](#cicd-pipeline)
+- [Databricks Delta Lake Extension](#databricks-delta-lake-extension)
 - [Using This Repository as a Template](#using-this-repository-as-a-template)
 - [Design Decisions](#design-decisions)
 - [Current Limitations](#current-limitations)
@@ -1435,6 +1436,52 @@ FROM PLAYERPULSE.MARTS.FCT_PLAYER_GAMES;
 # CI/CD Pipeline
 
 PlayerPulse uses GitHub Actions to automatically validate and deploy dbt changes.
+
+---
+
+# Databricks Delta Lake Extension
+
+PlayerPulse also runs a parallel Bronze/Silver/Gold pipeline on Databricks, using Delta Lake and
+Unity Catalog against the same raw S3 data — the same RAW/STAGING/MARTS layering as the
+Snowflake/dbt pipeline, implemented on a different engine. Full detail in
+[`docs/architecture.md`](docs/architecture.md#51-databricks-delta-lake-extension).
+
+---
+
+## Layers
+
+**Bronze** (`bronze.games_raw`) — reads the raw JSON archives from a Unity Catalog External
+Location, unmodified, one row per source file.
+
+**Silver** (`silver.games`) — explodes the nested `games` array with `LATERAL VIEW EXPLODE`
+(Spark SQL's equivalent of Snowflake's `LATERAL FLATTEN`) and flattens it into typed columns,
+mirroring the dbt `stg_games` model.
+
+**Gold** (`gold.fct_player_games`) — reframes white/black into player/opponent perspective and
+derives `game_outcome`/`rating_difference`, a direct port of the dbt `fct_player_games` mart.
+
+---
+
+## Access model
+
+The External Location's IAM role is read-only by design. Bronze/Silver/Gold are managed Delta
+tables — Databricks owns their storage, the same relationship Snowflake has with STAGING/MARTS.
+The read-only role cannot provision Auto Loader's file-notification infrastructure, which is
+expected and does not affect the batch reads this pipeline actually uses.
+
+---
+
+## Quality checks
+
+Six SQL assertions covering `not_null`, `unique`, `accepted_values`, and one custom check
+comparing Silver and Gold row counts — see architecture.md for details.
+
+---
+
+## Current scope
+
+Runs manually inside a notebook. Not yet orchestrated by Airflow, not scheduled, not covered by
+the GitHub Actions CI/CD pipeline.
 
 ---
 
