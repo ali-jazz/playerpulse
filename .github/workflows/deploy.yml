@@ -1,4 +1,4 @@
-name: dbt deploy
+name: deploy
 
 # A completed CI does not automatically authorize a production deployment.
 # Production must be explicitly enabled via the repository variable
