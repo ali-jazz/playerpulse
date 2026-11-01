@@ -1,0 +1,14 @@
+# Deliberately fake values: dbt parse must not connect to a live warehouse.
+playerpulse:
+  target: ci
+  outputs:
+    ci:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: PUBLIC
+      database: PLAYERPULSE
+      warehouse: CI_OFFLINE_ONLY
+      schema: CI_OFFLINE_ONLY
+      threads: 1

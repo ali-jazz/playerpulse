@@ -1,0 +1,4 @@
+# Direct dependency pins, not yet a full transitive lockfile.
+pytest==8.4.2
+ruff==0.14.0
+boto3==1.43.61
