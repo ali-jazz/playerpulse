@@ -1,0 +1,2 @@
+# Same adapter release as PlayerPulse Dockerfile; transitive lock pending.
+dbt-snowflake==1.12.0
