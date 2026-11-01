@@ -31,3 +31,7 @@ Thumbs.db
 config/airflow.cfg
 
 dbt/.user.yml
+
+# Safe CI/CD profile templates
+!.github/ci-profiles/profiles.yml
+!.github/cd-profiles/profiles.yml
