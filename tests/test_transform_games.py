@@ -1,9 +1,16 @@
-from transform_games.py import unix_to_utc
+from scripts.transform_games import unix_to_utc
 
-def test_unix_to_utc():
+def test_unix_to_utc_none():
+    assert unix_to_utc(None) is None
+   
+   
 
-    assert unix_to_utc(None) == None
+def test_unix_to_utc_zero():
     assert unix_to_utc(0) == "1970-01-01T00:00:00+00:00"
-    assert unix_to_utc(86499) == "1970-01-02T00:00:00+00:00"
 
-    pass
+    
+
+
+def test_unix_to_utc_oneday():
+    assert unix_to_utc(86400) == "1970-01-02T00:00:00+00:00"
+    
