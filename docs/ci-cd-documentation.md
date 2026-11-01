@@ -21,7 +21,7 @@ Python unit/lint     dbt parse (fake profile; NO Snowflake)
           gate: CI=success AND event=push AND branch=main
                 AND same repository AND ENABLE_SNOWFLAKE_DEPLOY=true
                          |
-            protected GitHub environment + reviewer approval
+            Production environment protections (required before CD enablement)
                          |
                     checkout tested SHA
                          |
@@ -36,7 +36,7 @@ Python unit/lint     dbt parse (fake profile; NO Snowflake)
 - Environment protections are configured in GitHub Settings, not guaranteed by YAML alone. Explicit reviewer approval is needed before granting CD environment secrets.
 - `target: prod` with dbt `generate_schema_name_for_env` preserves custom `STAGING` and `MARTS` production names. The CI target uses an isolated schema instead; this macro has to be adopted with care for any other consumers.
 - `dbt parse` checks compilation/parsing logic without connecting to Snowflake; it does not establish that SQL executes or data quality holds in the warehouse.
-- Do not promise rollback of `dbt build` or a transactionally safe release until you have tested an actual recovery procedure.
+- Rollback of `dbt build` or a transactionally safe release until you have tested an actual recovery procedure.
 
 ## Release gate — configure before enabling production CD
 
@@ -59,7 +59,7 @@ The evidence below was inspected in GitHub Actions for [Pull Request #1](https:/
 | Recovery after correction | [Successful workflow run](https://github.com/ali-jazz/playerpulse/actions/runs/41339689252) | Python tests, Ruff, and offline dbt parse passed |
 | Last verified application commit | `b2358b6976a3440eab5530be8f9db99085a9406b` | Both CI jobs successful at this revision |
 | PR-triggered privileged deployment | CD workflow checks event `push`, branch `main`, successful CI, same repository and explicit enablement flag | Design reviewed; no live negative-test of privileged deployment performed |
-| Legacy CD workflow | Disabled manually in GitHub Actions, as reported by repository owner | Operational safeguard; verify again before merging |
+| Legacy CD workflow | Disabled manually in GitHub Actions, Legacy deployment workflow manually disabled | Operational safeguard; verify again before merging |
 | Production Snowflake deployment | Not attempted | Not verified |
 
 ### Interpretation and limits
