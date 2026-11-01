@@ -2,7 +2,7 @@
 
 ## Architecture
 
-```
+```text
 PR targeting main / push main
             |
             v
@@ -38,30 +38,37 @@ Python unit/lint     dbt parse (fake profile; NO Snowflake)
 - `dbt parse` checks compilation/parsing logic without connecting to Snowflake; it does not establish that SQL executes or data quality holds in the warehouse.
 - Do not promise rollback of `dbt build` or a transactionally safe release until you have tested an actual recovery procedure.
 
-## Release gate — configure later, not before Monday
+## Release gate — configure before enabling production CD
 
 1. In repo Settings -> Environments, create `snowflake-production` with required reviewers and branch restrictions to `main`.
 2. Store `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, and `SNOWFLAKE_PASSWORD` as **environment secrets**, never hardcode them.
 3. Store `SNOWFLAKE_ROLE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_SCHEMA` as protected environment variables. E.g. `SNOWFLAKE_DATABASE=PLAYERPULSE`, `SNOWFLAKE_SCHEMA=ANALYTICS`. Role should be restricted to required read/write paths (not ACCOUNTADMIN).
 4. Verify the Snowflake role cannot write `RAW` or arbitrary databases and has only the needed privileges on materialization schemas.
 5. Prove a staging `dbt build` works first in a dedicated, disposable CI schema under separate credentials. Confirm output table names and warehouse cost.
-6. Only if steps 1-5 have passed, set repository variable `ENABLE_SNOWFLAKE_DEPLOY` to `true`. Re-run after manual approval. Never enable this before reviewing the current repository main branch configuration.
+6. Only if steps 1-5 have passed, set repository variable `ENABLE_SNOWFLAKE_DEPLOY` to `true`. Never enable this before reviewing the current repository main branch configuration.
 
-## Evidence for Mujin (fill after actual GitHub verification)
+## Verified GitHub Actions evidence — 2026-11-01
 
-| Evidence | URL / observation | Verified? |
+The evidence below was inspected in GitHub Actions for [Pull Request #1](https://github.com/ali-jazz/playerpulse/pull/1), from `cicd` into `main`. The PR was open and unmerged when this documentation was prepared.
+
+| Check | Evidence | Outcome |
 |---|---|---|
-| Pull Request | TBD | No |
-| Green Python tests + lint | TBD | No |
-| Green offline dbt parse | TBD | No |
-| Deliberately failing assertion run | TBD | No |
-| Fixed assertion run | TBD | No |
-| CD skip for PR | TBD | No |
-| CD disabled by default (`ENABLE_SNOWFLAKE_DEPLOY` unset) | Configured in proposal; runner pending | No |
-| Actual Snowflake deployment | Not performed | No |
+| Pull Request | [PR #1](https://github.com/ali-jazz/playerpulse/pull/1) | Open; merge not performed at verification time |
+| Initial CI | [Successful workflow run](https://github.com/ali-jazz/playerpulse/actions/runs/41338961397) | Python checks and offline dbt parse passed |
+| Intentional regression | [Failed workflow run](https://github.com/ali-jazz/playerpulse/actions/runs/41339578168) | `Run unit tests` failed in the Python job, while dbt parse passed |
+| Recovery after correction | [Successful workflow run](https://github.com/ali-jazz/playerpulse/actions/runs/41339689252) | Python tests, Ruff, and offline dbt parse passed |
+| Last verified application commit | `b2358b6976a3440eab5530be8f9db99085a9406b` | Both CI jobs successful at this revision |
+| PR-triggered privileged deployment | CD workflow checks event `push`, branch `main`, successful CI, same repository and explicit enablement flag | Design reviewed; no live negative-test of privileged deployment performed |
+| Legacy CD workflow | Disabled manually in GitHub Actions, as reported by repository owner | Operational safeguard; verify again before merging |
+| Production Snowflake deployment | Not attempted | Not verified |
 
-## Suggested short explanation in an interview
+### Interpretation and limits
 
-> I revised a dbt + Snowflake project to run Python unit tests, linting and an offline dbt parse check for each pull request. The CI jobs have read-only repository permissions and no cloud credentials. Delivery is separately gated on the successful push-to-main CI, matches the tested commit SHA, and remains disabled until a protected Snowflake environment with restricted access is approved. Database integration tests and production rollout are explicitly tracked as follow-up work.
+- The red-to-green sequence demonstrates that a failing unit test makes the CI run fail, and that correcting it restores a green CI run. **It does not prove GitHub branch protection blocks merging**. That requires separately configured and verified required status checks.
+- The new `deploy.yml` checks `workflow_run.event == 'push'`, `head_branch == 'main'`, successful CI, matching source repository and `ENABLE_SNOWFLAKE_DEPLOY == 'true'`. It is designed not to deploy after a PR CI run. The original deployment workflow on `main` has been manually disabled; that is important until the guarded workflow reaches `main`.
+- The CD gate and environment name are defined in YAML, but environment approval rules, Snowflake least-privilege credentials and integration validation have **not** been confirmed. No production rollout has been exercised.
+- The passing `dbt parse` uses placeholder values and does **not** connect to Snowflake, execute SQL models, or validate warehouse data.
+- Documentation-only commits can trigger a new PR CI run. Recheck the latest run and PR merge state before merging.
 
-Only use this explanation after the stated CI checks pass on GitHub.
+
+The linked CI checks passed. The CD safeguards are configured but have not been exercised in production.
