@@ -36,7 +36,7 @@ Python unit/lint     dbt parse (fake profile; NO Snowflake)
 - Environment protections are configured in GitHub Settings, not guaranteed by YAML alone. Explicit reviewer approval is needed before granting CD environment secrets.
 - `target: prod` with dbt `generate_schema_name_for_env` preserves custom `STAGING` and `MARTS` production names. The CI target uses an isolated schema instead; this macro has to be adopted with care for any other consumers.
 - `dbt parse` checks compilation/parsing logic without connecting to Snowflake; it does not establish that SQL executes or data quality holds in the warehouse.
-- Rollback of `dbt build` or a transactionally safe release until you have tested an actual recovery procedure.
+- Rollback procedures have not yet been implemented or validated.
 
 ## Release gate — configure before enabling production CD
 
